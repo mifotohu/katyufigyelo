@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+// FIX: Leaflet CSS import at the very top for Vercel production build
+import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, CircleMarker } from 'react-leaflet';
-import { AlertTriangle, MapPin, Phone, X, Save, Loader2, Compass, Car, Mail, Key, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, MapPin, Phone, X, Save, Loader2, Compass, Car, Mail, Key, Info, ShieldCheck, ShieldAlert, ServerOff } from 'lucide-react';
 import L from 'leaflet';
 
-// Secure import
+// Secure import from your client file
 import { supabase } from './src/lib/supabaseClient';
 
 // --- TYPES ---
@@ -64,7 +66,10 @@ export default function App() {
   
   // --- INIT ---
   useEffect(() => {
-    fetchReports();
+    // CRITICAL FIX: Only fetch if supabase is configured
+    if (supabase) {
+      fetchReports();
+    }
     checkApiKeyValidity();
   }, []);
 
@@ -72,29 +77,20 @@ export default function App() {
   const checkApiKeyValidity = () => {
     const storedKey = localStorage.getItem('GEMINI_API_KEY');
     const storedTimestamp = localStorage.getItem('GEMINI_KEY_TIMESTAMP');
-    
-    // Check fallback env var safely
     const envKey = import.meta.env?.VITE_GEMINI_API_KEY || '';
 
     if (storedKey && storedTimestamp) {
       const now = Date.now();
       const twentyFourHours = 24 * 60 * 60 * 1000;
-      
-      // If key is valid (less than 24h old)
       if (now - parseInt(storedTimestamp, 10) < twentyFourHours) {
         setApiKey(storedKey);
         return;
       } else {
-        // Expired
         localStorage.removeItem('GEMINI_API_KEY');
         localStorage.removeItem('GEMINI_KEY_TIMESTAMP');
       }
     }
-
-    // Fallback to env variable if no local key
-    if (envKey) {
-      setApiKey(envKey);
-    }
+    if (envKey) setApiKey(envKey);
   };
 
   const handleSaveApiKey = (val: string) => {
@@ -104,18 +100,28 @@ export default function App() {
   };
 
   const fetchReports = async () => {
-    const { data, error } = await supabase.from('potholes').select('*');
-    if (!error && data) {
-      // Simulate counts for demo purposes if field is empty, otherwise use real data
-      const processed = data.map((item: any) => ({
-        ...item,
-        reports_count: item.reports_count || Math.floor(Math.random() * 12) + 1 
-      }));
-      setReports(processed);
+    if (!supabase) return; // Guard clause
+
+    try {
+      const { data, error } = await supabase.from('potholes').select('*');
+      if (error) {
+        console.error("Supabase error:", error);
+        return;
+      }
+      
+      if (data) {
+        const processed = data.map((item: any) => ({
+          ...item,
+          reports_count: item.reports_count || Math.floor(Math.random() * 12) + 1 
+        }));
+        setReports(processed);
+      }
+    } catch (err) {
+      console.warn("Fetch error (check connection):", err);
     }
   };
 
-  // --- GEOLOCATION ---
+  // --- GEOLOCATION (High Accuracy) ---
   const handleLocateMe = () => {
     if (!map) return;
     if (!navigator.geolocation) {
@@ -126,10 +132,17 @@ export default function App() {
       (position) => {
         const { latitude, longitude } = position.coords;
         setUserPos({ lat: latitude, lng: longitude });
-        map.flyTo([latitude, longitude], 16, { animate: true, duration: 1.5 });
+        // Zoom 17 as requested for better precision
+        map.flyTo([latitude, longitude], 17, { animate: true, duration: 1.5 });
       },
       (error) => {
         console.error("Geo error:", error);
+        alert("Nem sikerült lekérni a pozíciót. Ellenőrizd a GPS beállításokat.");
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
       }
     );
   };
@@ -143,41 +156,69 @@ export default function App() {
         setRoadPos('center');
         setIsFormOpen(true);
       },
+      locationfound(e) {
+        map.flyTo(e.latlng, 17);
+      },
     });
     return null;
   }
 
   // --- SUBMIT ---
   const handleSubmit = async () => {
+    if (!supabase) {
+      alert("Hiba: Nincs kapcsolat az adatbázissal.");
+      return;
+    }
     if (!newCoords || !desc.trim()) return;
+    
     setLoading(true);
 
-    const { error } = await supabase.from('potholes').insert([{ 
-      lat: newCoords.lat, 
-      lng: newCoords.lng, 
-      location_desc: desc,
-      road_position: roadPos,
-      reports_count: 1 
-    }]);
+    try {
+      const { error } = await supabase.from('potholes').insert([{ 
+        lat: newCoords.lat, 
+        lng: newCoords.lng, 
+        location_desc: desc,
+        road_position: roadPos,
+        reports_count: 1 // Default to 1 per spec
+      }]);
 
-    setLoading(false);
+      if (error) throw error;
 
-    if (error) {
-      alert("Hiba történt: " + error.message);
-    } else {
       alert("Sikeres bejelentés! Köszönjük! 🙌");
       setIsFormOpen(false);
       setDesc('');
-      fetchReports(); // Refresh map
+      fetchReports(); 
+    } catch (error: any) {
+      alert("Hiba történt a mentés során: " + (error.message || "Ismeretlen hiba"));
+    } finally {
+      setLoading(false);
     }
   };
 
+  // --- RENDER ERROR IF SUPABASE MISSING ---
+  if (!supabase) {
+    return (
+      <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 items-center justify-center p-6 text-center">
+        <div className="bg-red-500/10 p-6 rounded-3xl border border-red-500/30 max-w-md shadow-2xl shadow-red-900/20">
+          <ServerOff className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h1 className="text-2xl font-bold text-white mb-2">Supabase Konfiguráció Hiányzik</h1>
+          <p className="text-slate-400 mb-6">
+            Az alkalmazás nem tud csatlakozni az adatbázishoz. Kérlek állítsd be a <code className="bg-slate-900 px-2 py-1 rounded text-amber-500 text-xs">VITE_SUPABASE_URL</code> és <code className="bg-slate-900 px-2 py-1 rounded text-amber-500 text-xs">VITE_SUPABASE_ANON_KEY</code> környezeti változókat a Vercel felületén vagy a .env fájlban.
+          </p>
+          <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="inline-block bg-slate-800 hover:bg-slate-700 text-white font-medium py-2 px-4 rounded-xl transition border border-slate-700">
+            Supabase Dashboard Megnyitása
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // --- MAIN APP RENDER ---
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 font-sans overflow-hidden">
       
-      {/* --- HEADER --- */}
+      {/* --- HEADER (Fixed Height: h-20 / sm:h-20) --- */}
       <header className="flex-none bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between px-4 py-3 sm:py-0 sm:h-20 z-[1000] shadow-2xl relative gap-3">
-        
         {/* Logo & Title */}
         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
           <div className="flex items-center gap-2">
@@ -191,8 +232,7 @@ export default function App() {
               <span className="text-[10px] text-amber-500 font-medium tracking-widest">COMMUNITY MAP</span>
             </div>
           </div>
-
-          {/* Legend - Visible on Mobile in Header row */}
+          {/* Mobile Legend */}
           <div className="flex items-center gap-2 text-[10px] sm:hidden">
              <div className="w-2 h-2 rounded-full bg-blue-500"></div><span className="text-slate-400">1-10</span>
              <div className="w-2 h-2 rounded-full bg-amber-500"></div><span className="text-slate-400">11-30</span>
@@ -220,7 +260,6 @@ export default function App() {
               className="bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-amber-500 focus:outline-none w-full sm:w-48 transition-all"
             />
           </div>
-          
           <div className="relative">
             <button 
               className={`transition p-2 rounded-lg ${showTooltip ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:text-amber-400 hover:bg-slate-800'}`}
@@ -228,8 +267,6 @@ export default function App() {
             >
               <Info size={18} />
             </button>
-
-            {/* Tooltip */}
             {showTooltip && (
               <div className="absolute right-0 top-12 w-72 bg-slate-900 border border-slate-700 p-4 rounded-xl shadow-2xl z-[2000] text-xs text-slate-300 animate-in fade-in slide-in-from-top-2">
                 <h3 className="font-bold text-white mb-3 flex items-center gap-2 border-b border-slate-800 pb-2">
@@ -250,12 +287,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* --- MAP AREA --- */}
+      {/* --- MAP AREA (Calculated Height) --- */}
       <main className="flex-1 relative bg-slate-800 w-full z-0">
-        {/* Height calculation as requested for the container */}
-        <div className="h-[calc(100vh-160px)] w-full">
+        <div className="w-full relative h-[calc(100vh-136px)] sm:h-[calc(100vh-136px)]">
           <MapContainer 
-            center={[47.1625, 19.5033]} // Hungary Center
+            center={[47.1625, 19.5033]} 
             zoom={7} 
             scrollWheelZoom={true}
             style={{ height: "100%", width: "100%" }}
@@ -268,7 +304,7 @@ export default function App() {
             
             <MapClickHandler />
             
-            {/* New Report Location Marker (While Form is Open) */}
+            {/* New Report Marker */}
             {isFormOpen && newCoords && (
               <CircleMarker 
                 center={[newCoords.lat, newCoords.lng]}
@@ -279,6 +315,7 @@ export default function App() {
               </CircleMarker>
             )}
 
+            {/* User Position */}
             {userPos && (
               <CircleMarker 
                 center={[userPos.lat, userPos.lng]}
@@ -289,6 +326,7 @@ export default function App() {
               </CircleMarker>
             )}
 
+            {/* Existing Reports */}
             {reports.map((report) => (
               <Marker 
                 key={report.id} 
@@ -331,7 +369,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* --- FOOTER --- */}
+      {/* --- FOOTER (Fixed Height: h-14) --- */}
       <footer className="h-14 flex-none bg-slate-900 border-t border-slate-800 flex items-center justify-around text-slate-400 text-xs sm:text-sm z-[1000]">
         <a href="tel:+3617766107" className="flex items-center gap-3 hover:text-white transition group">
           <Phone size={16} className="text-amber-500 group-hover:scale-110 transition" />
