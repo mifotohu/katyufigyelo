@@ -121,29 +121,33 @@ export default function App() {
     }
   };
 
-  // --- GEOLOCATION (High Accuracy) ---
+  // --- GEOLOCATION (High Accuracy & Zoom 18) ---
   const handleLocateMe = () => {
     if (!map) return;
     if (!navigator.geolocation) {
       alert("Helymeghatározás nem támogatott.");
       return;
     }
+    
+    // Kényszerítjük a nagy pontosságot a mobil GPS chipjének használatához
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    };
+
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         setUserPos({ lat: latitude, lng: longitude });
-        // Zoom 17 as requested for better precision
-        map.flyTo([latitude, longitude], 17, { animate: true, duration: 1.5 });
+        // Zoom 18 a pontos helyszíneléshez
+        map.flyTo([latitude, longitude], 18, { animate: true, duration: 1.5 });
       },
       (error) => {
         console.error("Geo error:", error);
-        alert("Nem sikerült lekérni a pozíciót. Ellenőrizd a GPS beállításokat.");
+        alert("Nem sikerült lekérni a pontos pozíciót. Ellenőrizd, hogy engedélyezted-e a helymeghatározást.");
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
-      }
+      options
     );
   };
 
@@ -157,7 +161,7 @@ export default function App() {
         setIsFormOpen(true);
       },
       locationfound(e) {
-        map.flyTo(e.latlng, 17);
+        map.flyTo(e.latlng, 18);
       },
     });
     return null;
@@ -217,7 +221,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 font-sans overflow-hidden">
       
-      {/* --- HEADER (Fixed Height: h-20 / sm:h-20) --- */}
+      {/* --- HEADER (Fixed Flex Item) --- */}
       <header className="flex-none bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between px-4 py-3 sm:py-0 sm:h-20 z-[1000] shadow-2xl relative gap-3">
         {/* Logo & Title */}
         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
@@ -287,74 +291,73 @@ export default function App() {
         </div>
       </header>
 
-      {/* --- MAP AREA (Calculated Height) --- */}
-      <main className="flex-1 relative bg-slate-800 w-full z-0">
-        <div className="w-full relative h-[calc(100vh-136px)] sm:h-[calc(100vh-136px)]">
-          <MapContainer 
-            center={[47.1625, 19.5033]} 
-            zoom={7} 
-            scrollWheelZoom={true}
-            style={{ height: "100%", width: "100%" }}
-            ref={setMap}
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            
-            <MapClickHandler />
-            
-            {/* New Report Marker */}
-            {isFormOpen && newCoords && (
-              <CircleMarker 
-                center={[newCoords.lat, newCoords.lng]}
-                radius={20}
-                pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.2, weight: 2, dashArray: '5, 5' }}
-              >
-                 <Popup>Új bejelentés helye</Popup>
-              </CircleMarker>
-            )}
+      {/* --- MAP AREA (Flexible Layout) --- */}
+      <main className="flex-1 relative w-full z-0 bg-slate-800">
+        {/* Map Container takes 100% of the flex-1 parent */}
+        <MapContainer 
+          center={[47.1625, 19.5033]} 
+          zoom={7} 
+          scrollWheelZoom={true}
+          style={{ height: "100%", width: "100%" }}
+          ref={setMap}
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          
+          <MapClickHandler />
+          
+          {/* New Report Marker */}
+          {isFormOpen && newCoords && (
+            <CircleMarker 
+              center={[newCoords.lat, newCoords.lng]}
+              radius={20}
+              pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.2, weight: 2, dashArray: '5, 5' }}
+            >
+               <Popup>Új bejelentés helye</Popup>
+            </CircleMarker>
+          )}
 
-            {/* User Position */}
-            {userPos && (
-              <CircleMarker 
-                center={[userPos.lat, userPos.lng]}
-                radius={8}
-                pathOptions={{ color: 'white', fillColor: '#3b82f6', fillOpacity: 1, weight: 2 }}
-              >
-                <Popup>Te itt vagy!</Popup>
-              </CircleMarker>
-            )}
+          {/* User Position */}
+          {userPos && (
+            <CircleMarker 
+              center={[userPos.lat, userPos.lng]}
+              radius={8}
+              pathOptions={{ color: 'white', fillColor: '#3b82f6', fillOpacity: 1, weight: 2 }}
+            >
+              <Popup>Te itt vagy!</Popup>
+            </CircleMarker>
+          )}
 
-            {/* Existing Reports */}
-            {reports.map((report) => (
-              <Marker 
-                key={report.id} 
-                position={[report.lat, report.lng]}
-                icon={createSmartIcon(report.reports_count)}
-              >
-                <Popup className="custom-popup">
-                  <div className="p-1">
-                    <h3 className="font-bold text-slate-900 border-b border-slate-200 pb-1 mb-1">{report.location_desc}</h3>
-                    <div className="text-xs text-slate-600 space-y-1">
-                       <p className="flex justify-between">
-                         <span>Helyzet:</span>
-                         <span className="font-semibold text-slate-800">
-                           {report.road_position === 'edge' ? 'Út szélén' : 
-                            report.road_position === 'lane_change' ? 'Sávváltónál' : 'Középen'}
-                         </span>
-                       </p>
-                       <p className="flex justify-between">
-                         <span>Bejelentések:</span> 
-                         <span className="font-bold text-slate-900">{report.reports_count} db</span>
-                       </p>
-                    </div>
+          {/* Existing Reports */}
+          {reports.map((report) => (
+            <Marker 
+              key={report.id} 
+              position={[report.lat, report.lng]}
+              icon={createSmartIcon(report.reports_count)}
+            >
+              <Popup className="custom-popup">
+                <div className="p-1">
+                  <h3 className="font-bold text-slate-900 border-b border-slate-200 pb-1 mb-1">{report.location_desc}</h3>
+                  <div className="text-xs text-slate-600 space-y-1">
+                     <p className="flex justify-between">
+                       <span>Helyzet:</span>
+                       <span className="font-semibold text-slate-800">
+                         {report.road_position === 'edge' ? 'Út szélén' : 
+                          report.road_position === 'lane_change' ? 'Sávváltónál' : 'Középen'}
+                       </span>
+                     </p>
+                     <p className="flex justify-between">
+                       <span>Bejelentések:</span> 
+                       <span className="font-bold text-slate-900">{report.reports_count} db</span>
+                     </p>
                   </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
-        </div>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
 
         <button 
           onClick={handleLocateMe}
@@ -369,7 +372,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* --- FOOTER (Fixed Height: h-14) --- */}
+      {/* --- FOOTER (Fixed Flex Item) --- */}
       <footer className="h-14 flex-none bg-slate-900 border-t border-slate-800 flex items-center justify-around text-slate-400 text-xs sm:text-sm z-[1000]">
         <a href="tel:+3617766107" className="flex items-center gap-3 hover:text-white transition group">
           <Phone size={16} className="text-amber-500 group-hover:scale-110 transition" />
