@@ -1,0 +1,8 @@
+{
+  "name": "Kátyúfigyelő",
+  "description": "Magyarországi közösségi kátyúbejelentő alkalmazás interaktív térképpel és AI támogatással.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ]
+}
