@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
-import { AlertTriangle, Car, ShieldAlert, Phone, Plus, X, Save, Loader2, MapPin } from 'lucide-react';
+import { AlertTriangle, Car, ShieldAlert, Phone, Plus, X, Save, Loader2 } from 'lucide-react';
 import L from 'leaflet';
 import { supabase } from './src/lib/supabaseClient';
 
-// --- LEAFLET CSS & IKON FIXES ---
 import 'leaflet/dist/leaflet.css';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
@@ -28,60 +27,57 @@ export default function App() {
   const [address, setAddress] = useState('');
   const [roadPos, setRoadPos] = useState('center');
 
-  // Adatok lekérése az adatbázisból
   const fetchReports = useCallback(async () => {
     if (!supabase) return;
-    const { data, error } = await supabase.from('potholes').select('*');
+    const { data, error } = await supabase.from('potholes').select('*').order('reports_count', { ascending: false });
     if (!error && data) setReports(data);
   }, []);
 
-  useEffect(() => { 
-    fetchReports(); 
-  }, [fetchReports]);
+  useEffect(() => { fetchReports(); }, [fetchReports]);
 
-  // --- TÉRKÉP MEGJELENÍTÉS FIX (Vercel/Mobil/PC) ---
-  // Kényszerítjük a térképet a méret újraszámolására, hogy ne legyen szürke
   useEffect(() => {
-    if (map) {
-      setTimeout(() => { map.invalidateSize(); }, 400);
-    }
+    if (map) { setTimeout(() => { map.invalidateSize(); }, 400); }
   }, [map, isFormOpen]);
 
-  // --- BEKÜLDÉSI LOGIKA (OKOS SZÁMLÁLÓVAL) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!address || !supabase) return;
     setLoading(true);
 
     try {
-      const fullAddress = `${city}, ${address.trim()}`;
+      // Normalizáljuk a címet: kisbetűssé tesszük a biztos egyezés érdekében
+      const rawAddress = `${city}, ${address.trim()}`;
+      const fullAddress = rawAddress.charAt(0).toUpperCase() + rawAddress.slice(1); // Szép formázás
       
-      // 1. ELLENŐRZÉS: Van-e már ilyen pontos cím az adatbázisban?
-      const { data: existing, error: findError } = await supabase
+      // 1. ELLENŐRZÉS: Kis- és nagybetű független keresés (ILIKE)
+      // A .limit(1) biztosítja, hogy ne kapjunk hibát, ha már vannak duplikációk
+      const { data: existingReports, error: findError } = await supabase
         .from('potholes')
         .select('id, reports_count')
-        .eq('location_desc', fullAddress)
-        .maybeSingle();
+        .ilike('location_desc', fullAddress) 
+        .limit(1);
 
       if (findError) throw findError;
 
+      const existing = existingReports && existingReports.length > 0 ? existingReports[0] : null;
+
       if (existing) {
-        // 2/A. HA LÉTEZIK: Csak a számlálót növeljük meg eggyel
+        // 2/A. UPDATE: Meglévő sor frissítése
         const { error: updateError } = await supabase
           .from('potholes')
           .update({ reports_count: (existing.reports_count || 1) + 1 })
           .eq('id', existing.id);
         
         if (updateError) throw updateError;
-        alert("Újabb bejelentés rögzítve ehhez a kátyúhoz! 📈");
+        alert(`Sikeresen frissítve! Ez már a(z) ${existing.reports_count + 1}. bejelentés erre a helyre.`);
 
       } else {
-        // 2/B. HA NEM LÉTEZIK: Koordináták lekérése és új sor beszúrása
+        // 2/B. INSERT: Új koordináták és új sor
         const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}&limit=1`);
         const geoData = await geoRes.json();
 
         if (!geoData || geoData.length === 0) {
-          alert("Ezt a címet nem találom a térképen! Ellenőrizd az utca nevét.");
+          alert("A címet nem sikerült beazonosítani a térképen!");
           setLoading(false);
           return;
         }
@@ -95,16 +91,15 @@ export default function App() {
         }]);
 
         if (insertError) throw insertError;
-        alert("Sikeresen rögzítettük az új kátyút! ⚠️");
+        alert("Új kátyú sikeresen rögzítve!");
       }
 
-      // 3. LEZÁRÁS: Ablak becsukása és térkép frissítése
       setIsFormOpen(false);
       setAddress('');
       await fetchReports();
 
     } catch (err: any) {
-      alert("Hiba történt: " + err.message);
+      alert("Adatbázis hiba: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -112,15 +107,13 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 overflow-hidden font-sans">
-      {/* HEADER */}
       <header className="h-16 flex-none bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 z-[1000] shadow-xl">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 text-white">
           <AlertTriangle className="text-amber-500 w-6 h-6" />
-          <h1 className="text-lg font-black italic uppercase text-white tracking-tighter">Kátyúfigyelő <span className="text-amber-500">v2.1</span></h1>
+          <h1 className="text-lg font-black italic uppercase tracking-tighter">Kátyúfigyelő V2.1</h1>
         </div>
       </header>
 
-      {/* TÉRKÉP - FLEX-GROW KÉNYSZERÍTÉSSEL */}
       <main className="flex-1 relative bg-slate-800 w-full overflow-hidden">
         <MapContainer 
           center={[47.1625, 19.5033]} 
@@ -132,80 +125,72 @@ export default function App() {
           {reports.map((r: any) => (
             <Marker key={r.id} position={[r.lat, r.lng]}>
               <Popup>
-                <div className="text-slate-900 p-1 min-w-[150px]">
-                  <p className="font-bold border-b border-slate-200 pb-1 mb-1">{r.location_desc}</p>
-                  <p className="text-red-600 font-black text-sm">{r.reports_count} Bejelentés</p>
-                  <p className="text-[10px] text-slate-500 mt-1 uppercase">Helyzet: {r.road_position === 'edge' ? 'Út széle' : 'Középen'}</p>
+                <div className="text-slate-900 p-2 min-w-[180px]">
+                  <p className="font-bold text-sm border-b pb-1 mb-1">{r.location_desc}</p>
+                  <div className="flex justify-between items-center mt-2">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">Státusz:</span>
+                    <span className="text-xs font-black text-red-600">{r.reports_count} BEJELENTÉS</span>
+                  </div>
                 </div>
               </Popup>
             </Marker>
           ))}
         </MapContainer>
 
-        {/* ÚJ BEJELENTÉS GOMB */}
         <button 
           onClick={() => setIsFormOpen(true)}
-          className="absolute bottom-6 right-6 bg-amber-500 text-slate-900 font-black px-6 py-4 rounded-2xl shadow-2xl z-[900] flex items-center gap-2 hover:scale-105 active:scale-95 transition-all uppercase italic border-2 border-slate-900/10"
+          className="absolute bottom-6 right-6 bg-amber-500 text-slate-900 font-black px-6 py-4 rounded-2xl shadow-2xl z-[900] flex items-center gap-2 hover:scale-105 active:scale-95 transition-all uppercase italic border-2 border-white/20"
         >
           <Plus size={20} /> Új bejelentés
         </button>
       </main>
 
-      {/* FOOTER */}
       <footer className="h-12 flex-none bg-slate-900 border-t border-slate-800 flex items-center justify-around text-[10px] text-slate-500 font-bold uppercase z-[1000]">
         <div className="flex items-center gap-1"><Phone size={12} className="text-amber-500"/> 06-1-819-9000</div>
         <div className="flex items-center gap-1"><ShieldAlert size={12} className="text-red-600"/> 112</div>
       </footer>
 
-      {/* BEJELENTŐ MODAL */}
       {isFormOpen && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
           <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
             <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
-              <h2 className="text-xl font-black italic uppercase tracking-tighter">Bejelentés</h2>
+              <h2 className="text-xl font-black italic uppercase tracking-tighter">Adatok megadása</h2>
               <button onClick={() => setIsFormOpen(false)} className="text-slate-500 hover:text-white"><X /></button>
             </div>
             
             <form onSubmit={handleSubmit} className="p-8 space-y-5">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Település</label>
-                <input 
-                  type="text" 
-                  value={city} 
-                  onChange={(e) => setCity(e.target.value)}
-                  className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Utca, házszám</label>
-                <input 
-                  type="text" 
-                  placeholder="Pl: Váci út 120"
-                  required
-                  value={address} 
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Kátyú helyzete</label>
-                <select 
-                  value={roadPos} 
-                  onChange={(e) => setRoadPos(e.target.value)}
-                  className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition cursor-pointer"
-                >
-                  <option value="center">Út közepén</option>
-                  <option value="edge">Út szélén</option>
-                  <option value="lane_change">Sávváltónál</option>
-                </select>
-              </div>
+              <input 
+                type="text" 
+                placeholder="Település" 
+                value={city} 
+                onChange={(e) => setCity(e.target.value)}
+                className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition"
+              />
+              <input 
+                type="text" 
+                placeholder="Utca, házszám" 
+                required
+                value={address} 
+                onChange={(e) => setAddress(e.target.value)}
+                className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition"
+              />
+              <select 
+                value={roadPos} 
+                onChange={(e) => setRoadPos(e.target.value)}
+                className="w-full bg-slate-100 rounded-xl px-4 py-3 font-bold text-slate-800 outline-none border-2 border-transparent focus:border-amber-500 transition"
+              >
+                <option value="center">Út közepén</option>
+                <option value="edge">Út szélén</option>
+                <option value="lane_change">Sávváltónál</option>
+              </select>
 
               <button 
                 type="submit" 
                 disabled={loading}
-                className="w-full bg-slate-900 text-white font-black py-5 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-slate-800 transition active:scale-95 disabled:opacity-50 uppercase italic text-lg"
+                className="w-full bg-slate-900 text-white font-black py-5 rounded-2xl flex items-center justify-center gap-3 hover:bg-slate-800 transition active:scale-95 disabled:opacity-50 uppercase italic text-lg"
               >
-                {loading ? <Loader2 className="animate-spin text-amber-500" /> : <><Save size={20}/> Beküldés</>}
+                {loading ? <Loader2 className="animate-spin text-amber-500" /> : <Save size={20}/>} 
+                {loading ? 'Folyamatban...' : 'Beküldés'}
               </button>
             </form>
           </div>
